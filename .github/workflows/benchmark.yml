@@ -1,0 +1,41 @@
+name: Benchmark
+
+# Lancement manuel : benchmark complet dans l'image de production, sur x86 natif.
+on:
+  workflow_dispatch:
+    inputs:
+      nominal:
+        description: Documents par type, conditions nominales
+        default: "50"
+      degraded:
+        description: Documents par type et par condition dégradée
+        default: "8"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/inference
+          load: true
+          tags: visiondoc-inference:bench
+          cache-from: type=gha
+      - name: Benchmark et calibrage des réglages
+        run: |
+          mkdir -p benchmarks/reports && chmod 777 benchmarks/reports
+          run() {
+            docker run --rm -v "$PWD/benchmarks:/bench" -e XDG_CACHE_HOME=/tmp/cache \
+              -e GITHUB_SHA visiondoc-inference:bench "$@"
+          }
+          run python /bench/run.py --label ci-x86 --out /bench/reports \
+            --nominal "${{ inputs.nominal }}" --degraded "${{ inputs.degraded }}"
+          run python /bench/calibrate.py speed --count 8 --threads 2 4 \
+            | tee benchmarks/reports/speed-ci-x86.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: benchmarks/reports/

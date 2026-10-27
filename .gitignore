@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Aucune image hors spécimens synthétiques (spec A7)
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.pdf
+!fixtures/**
+!benchmarks/specimens/**
+!docs/images/**
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/

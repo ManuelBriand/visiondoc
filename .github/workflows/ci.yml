@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  inference:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/inference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      # opencv-contrib-python (imposé par paddlex) dépend de libGL.
+      - run: sudo apt-get update && sudo apt-get install -y libgl1
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/visiondoc
+          key: fonts-v2
+      - run: uv python install 3.12
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest --cov --cov-report=term-missing
+
+  inference-ocr:
+    # Lecture réelle avec PaddleOCR : modèle téléchargé une fois puis mis en cache.
+    runs-on: ubuntu-latest
+    needs: inference
+    defaults:
+      run:
+        working-directory: apps/inference
+    env:
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libgl1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/visiondoc
+            ~/.paddlex
+          key: ocr-models-v2
+      - run: uv python install 3.12
+      - run: uv sync --locked --extra ocr
+      - run: uv run pytest -m slow
+
+  docker:
+    # Image de production construite puis testée en conteneur, système de fichiers en lecture seule.
+    runs-on: ubuntu-latest
+    needs: inference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libgl1
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/inference
+          load: true
+          tags: visiondoc-inference:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Spécimen synthétique
+        working-directory: apps/inference
+        run: |
+          uv python install 3.12
+          uv sync --locked
+          uv run python -m inference.synth --kind fr_passport --seed 1 --out /tmp/passeport.jpg
+      - name: Test de fumée
+        run: |
+          key=$(python3 -c "import secrets; print('vd_' + secrets.token_urlsafe(32))")
+          hash=$(python3 -c "import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$key")
+          docker run -d --name inference --read-only --tmpfs /tmp:size=64m --cap-drop ALL \
+            -p 8000:8000 -e VISIONDOC_API_KEY_HASHES="$hash" visiondoc-inference:ci
+          apps/inference/scripts/smoke_test.sh http://127.0.0.1:8000 "$key" /tmp/passeport.jpg
+      - if: failure()
+        run: docker logs inference
